@@ -20,9 +20,3 @@ spec:
           image: skuser01.azurecr.io/payment:v1
           ports:
             - containerPort: 8080
-          env:
-            - name: configurl2
-              valueFrom:
-                configMapKeyRef:
-                  name: apiurl2
-                  key: url2
