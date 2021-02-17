@@ -37,9 +37,6 @@ logging:
     org.springframework.cloud: debug
 server:
   port: 8082
-api:
-  url:
-    Coupon: http://localhost:8085
 ---
 
 spring:
@@ -65,14 +62,3 @@ spring:
         event-out:
           destination: winterschoolone
           contentType: application/json
-feign:
-  hystrix:
-    enabled: true
-hystrix:
-  command:
-    default:
-      execution.isolation.thread.timeoutInMilliseconds: 610
-api:
-  url:
-    Coupon: ${configurl2}
-
