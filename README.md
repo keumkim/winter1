@@ -55,45 +55,84 @@ msaez.io 를 통해 구현한 Aggregate 단위로 Entity 를 선언 후, 구현�
 
 Entity Pattern 과 Repository Pattern 을 적용하기 위해 Spring Data REST 의 RestRepository 를 적용하였다.
 
-**Coupon 서비스의 Coupon.java**
+**SirenOrder 서비스의 SirenOrder.java**
 
 ```java 
 package winterschoolone;
 
 import javax.persistence.*;
 import org.springframework.beans.BeanUtils;
+
+import winterschoolone.external.Coupon;
+import winterschoolone.external.CouponService;
+import winterschoolone.external.Payment;
+import winterschoolone.external.PaymentService;
+
 import java.util.List;
 
 @Entity
-@Table(name="Coupon_table")
-public class Coupon {
+@Table(name="SirenOrder_table")
+public class SirenOrder {
 
     @Id
     @GeneratedValue(strategy=GenerationType.AUTO)
     private Long id;
-    private Long orderId;
     private String userId;
     private String menuId;
     private Integer qty;
-    private Integer stampQty;
+    private String status;
+    private String useCouponYN;
     private Integer couponQty;
-    
 
     @PostPersist
     public void onPostPersist(){
-        Issued issued = new Issued();
-        BeanUtils.copyProperties(this, issued);
-        issued.publishAfterCommit();
+    	Ordered ordered = new Ordered();
+        BeanUtils.copyProperties(this, ordered);
+        ordered.publishAfterCommit();
+
+        //Following code causes dependency to external APIs
+        // it is NOT A GOOD PRACTICE. instead, Event-Policy mapping is recommended.
+        if("Y".equals(this.getUseCouponYN()) && this.getCouponQty() >= this.getQty()) {//coupon 사
+	        Coupon coupon = new Coupon();
+	        coupon.setOrderId(this.getId());
+	        coupon.setMenuId(this.menuId);
+	        coupon.setQty(this.getQty());
+	        coupon.setUserId(this.getUserId());
+	        coupon.setCouponQty(this.getCouponQty() - this.getQty());
+	        // mappings goes here
+	        SirenOrderApplication.applicationContext.getBean(CouponService.class)
+	        .use(coupon);
+	        
+        }else {
+	        Payment payment = new Payment();
+	        payment.setOrderId(this.getId());
+	        payment.setMenuId(this.menuId);
+	        payment.setQty(this.getQty());
+	        payment.setUserId(this.getUserId());
+	        // mappings goes here
+	        SirenOrderApplication.applicationContext.getBean(PaymentService.class)
+	        .pay(payment);
+        }
     }
-    
-    @PreRemove
+
+    @PostUpdate
     public void onPostUpdate(){
-        Used used = new Used();
-        BeanUtils.copyProperties(this, used);
-        used.publishAfterCommit();
+        Updated updated = new Updated();
+        BeanUtils.copyProperties(this, updated);
+        updated.publishAfterCommit();
 
 
     }
+
+    @PreRemove
+    public void onPreRemove(){
+        OrderCancelled orderCancelled = new OrderCancelled();
+        BeanUtils.copyProperties(this, orderCancelled);
+        orderCancelled.publishAfterCommit();
+
+
+    }
+
 
     public Long getId() {
         return id;
@@ -101,13 +140,6 @@ public class Coupon {
 
     public void setId(Long id) {
         this.id = id;
-    }
-    public Long getOrderId() {
-        return orderId;
-    }
-
-    public void setOrderId(Long orderId) {
-        this.orderId = orderId;
     }
     public String getUserId() {
         return userId;
@@ -130,27 +162,31 @@ public class Coupon {
     public void setQty(Integer qty) {
         this.qty = qty;
     }
-
-    public Integer getStampQty() {
-        return stampQty;
+    public String getStatus() {
+        return status;
     }
 
-    public void setStampQty(Integer stampQty) {
-        this.stampQty += stampQty;
+    public void setStatus(String status) {
+        this.status = status;
+    }
+    public String getUseCouponYN() {
+        return useCouponYN;
     }
 
+    public void setUseCouponYN(String useCouponYN) {
+        this. useCouponYN = useCouponYN;
+    }
     public Integer getCouponQty() {
         return couponQty;
     }
 
     public void setCouponQty(Integer couponQty) {
-        this.couponQty += couponQty;
+        this.couponQty = couponQty;
     }
-
 }
 ```
 
-**Coupon 서비스의 PolicyHandler.java**
+**SirenOrder 서비스의 PolicyHandler.java**
 ```java
 package winterschoolone;
 
@@ -174,58 +210,26 @@ public class PolicyHandler{
     }
     
     @Autowired
-    CouponRepository couponRepository;
+	SirenOrderRepository sirenOrderRepository;
 
     @StreamListener(KafkaProcessor.INPUT)
-    public void wheneverAssigned_(@Payload Assigned assigned){ //stampQty 증가
-    	
-    	if(assigned.isMe()){
-        	Optional<Coupon> optional = couponRepository.findById(assigned.getOrderId());
+    public void wheneverAssigned_(@Payload Assigned assigned){
+
+        if(assigned.isMe()){
+        	Optional<SirenOrder> optional = sirenOrderRepository.findById(assigned.getOrderId());
         	if(optional != null && optional.isPresent())
         	{
-        		Coupon coupon = optional.get();
+        		SirenOrder sirenOrder = optional.get();
         		
-        		// coupon 생성을 위한 stamp 개수 증가
-        		coupon.setStampQty(assigned.getQty());
-        		
-        		while(true) {
-        			if(coupon.getStampQty()>=10) { //10개 이상일 경우 Coupon지급
-        				coupon.setCouponQty(+1);
-        				coupon.setStampQty(-10);
-        			}
-        			else { 
-        				break;
-        			}			
-        		}
-        		
-        		couponRepository.save(coupon);
+        		sirenOrder.setStatus("Assigned");
+                // view 객체에 이벤트의 eventDirectValue 를 set 함
+                // view 레파지 토리에 save
+            	sirenOrderRepository.save(sirenOrder);
         	}
             
             System.out.println("##### listener  : " + assigned.toJson());
         }
     }
-    
-    @StreamListener(KafkaProcessor.INPUT)
-    public void wheneverPayed_(@Payload Payed payed){ //쿠폰 사용 처리
-
-    	if(payed.isMe()){
-            System.out.println("##### listener  : " + payed.toJson());
-            
-            Coupon coupon = new Coupon();
-            coupon.setMenuId(payed.getMenuId());
-            coupon.setOrderId(payed.getOrderId());
-            coupon.setQty(payed.getQty());
-            coupon.setUserId(payed.getUserId());
-  
-            if("Y".equals(payed.getUseCouponYN())) {
-            	coupon.setCouponQty(-1);
-            }
-            
-            couponRepository.save(coupon);
-        }
-    	
-    }
-  
 }
 ```
 
